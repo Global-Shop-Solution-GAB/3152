@@ -1,0 +1,690 @@
+Program.Sub.ScreenSU.Start
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+
+
+Variable.UDT.Parents.Define("Part",String)
+Variable.UDT.Parents.Define("Row",Long)
+Variable.UDT.Parents.Define("Level",Long)
+Variable.UDT.Parents.Define("Qty",Float)
+Variable.UDT.Parents.Define("Parent",String)
+Variable.UDT.Parents.Define("Desc",String)
+Variable.UDT.Parents.Define("Children",String)
+
+Variable.uGlobal.uParents.Declare("Parents")
+Variable.Global.sSheet.Declare(String)
+Variable.UDT.PartReplace.Define("Part",String)
+Variable.UDT.PartReplace.Define("Record",String)
+Variable.UDT.PartReplace.Define("QTY",String)
+Variable.UDT.PartReplace.Define("VENDOR",String)
+Variable.UDT.PartReplace.Define("LEADTIME",String)
+Variable.UDT.PartReplace.Define("CONV",String)
+
+Variable.uGlobal.uReplace.Declare("PartReplace")
+Variable.UDT.RouterRow.Define("Row",Long)
+Variable.UDT.RouterRow.Define("WC0",String)
+Variable.UDT.RouterRow.Define("WC1",String)
+Variable.UDT.RouterRow.Define("WC2",String)
+Variable.UDT.RouterRow.Define("WC3",String)
+Variable.UDT.RouterRow.Define("WC4",String)
+Variable.UDT.RouterRow.Define("WC5",String)
+Variable.UDT.RouterRow.Define("WC6",String)
+Variable.UDT.RouterRow.Define("WC7",String)
+Variable.UDT.RouterRow.Define("WC8",String)
+Variable.UDT.RouterRow.Define("WC9",String)
+Variable.UDT.RouterRow.Define("IsBOM",Boolean)
+Variable.UDT.RouterRow.Define("Material",String)
+Variable.UDT.RouterRow.Define("Part",String)
+Variable.UDT.RouterRow.Define("Length",String)
+Variable.uGlobal.uRouterRow.Declare("RouterRow")
+
+Variable.Global.ErrorLOg.Declare(String)
+Program.External.Include.Library("RouterUpload2.lib")
+Program.Sub.Definition.DefaultArgs("WCExists","wc")
+Program.Sub.Definition.DefaultArgs("Newpart","sPos*!*sQty")
+Variable.Global.iUBRep.Declare(Long,0)
+Variable.Global.sParts.Declare(String)
+Program.Sub.Definition.DefaultArgs("VendorPart","spos*!*sDesc*!*sVendor*!*sName*!*sPartMfg")
+Program.External.Include.Library("BOMUpload.lib")
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+V.Local.sFile.Declare(String)
+V.Local.sSheets.Declare(String)
+V.Local.sret.Declare(String)
+
+V.Local.bRet.Declare(Boolean)
+V.uGlobal.uReplace.Redim(0,0)
+F.ODBC.Connection!conx.OpenConnection(V.Ambient.PDSN,V.Ambient.PUser,V.Ambient.PPass)
+F.Intrinsic.Ui.ShowOpenFileDialog("","","",V.Local.sFile)
+F.Intrinsic.File.Exists(V.Local.sFile,V.Local.bRet)
+F.Intrinsic.Control.If(V.Local.bRet,=,True)
+	F.Intrinsic.UI.Inputbox("Please enter number of rows of Excel Sheet","Row Count","1000",V.Local.sret)
+	F.Intrinsic.Control.If(V.Local.sret.IsNumeric,=,True)
+		F.Intrinsic.ui.InvokeWaitDialog("Loading Excel Sheet")
+		F.Automation.MSExcel.ReadSpreadsheet(V.Local.sFile,40,V.Local.sret,V.Local.sFile)
+		'F.Automation.OOCalc.ReadSpreadsheet(V.Local.sFile,True,50,100,V.Local.sFile)
+
+		F.Intrinsic.String.Split(V.local.sFile,"&^&",V.Local.sSheets)
+		V.Global.sSheet.Set(V.local.sSheets(0))
+		F.Intrinsic.Control.CallSub(Processexcel)
+		F.Intrinsic.Control.CallSub(Procesboms)
+		F.Global.Inventory.PostPartBatch
+		F.Intrinsic.Control.CallSub(Updatepart)
+		F.Intrinsic.Control.CallSub(Buildrouters)
+	F.Intrinsic.Control.Else
+		F.Intrinsic.UI.Msgbox("Row count must be numeric")
+	F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Else
+	F.Intrinsic.ui.Msgbox("File Not Found")
+F.Intrinsic.Control.EndIf
+F.odbc.Connection!conx.Close
+
+F.Intrinsic.Control.CallSub(Writeerrorlog)
+F.Intrinsic.Control.End
+
+Program.Sub.Main.End
+
+Program.Sub.ProcessExcel.Start
+V.Local.sSheets.Declare(String)
+V.Local.sRows.Declare(String)
+V.Local.iRCt.Declare(Long)
+V.Local.iRNCt.Declare(Long)
+V.Local.iRChildCt.Declare(Long)
+V.Local.iX.Declare(Long)
+V.Local.sCells.Declare(String)
+V.Local.sCellsN.Declare(String)
+V.Local.iUB.Declare(Long)
+V.Local.iWCct.Declare(Long)
+V.Local.iLevelPos.Declare(Long)
+V.Local.ssource.Declare(String)
+V.Local.sAltDesc.Declare(String)
+V.Local.sAltDesc.Redim(0,1)
+V.Local.iLevelPrev.Declare(Long)
+V.Local.sdesc.Declare(String)
+V.Local.iWC.Declare(Long)
+V.Local.sWC.Declare(String)
+
+' part pos 9?
+
+F.Intrinsic.String.Split(V.Global.sSheet,"$!$",V.Local.sRows)
+'loop through find parents
+
+V.uGlobal.uParents.Redim(0,V.Local.sRows.UBound)
+V.uGlobal.uRouterRow.Redim(0,V.Local.sRows.UBound)
+V.uGlobal.uReplace.RedimPreserve(0,V.Local.sRows.UBound)
+V.Local.iUB.Set(-1)
+
+F.Intrinsic.Control.For(V.Local.iRCt,4,V.Local.sRows.UBound,1)
+	F.Intrinsic.UI.ChangeWaitStatus("Processing Excel Sheet",V.Local.iRCt,1,V.Local.sRows.UBound)
+	F.Intrinsic.Control.If(V.Local.sRows(v.Local.iRCt).Trim,<>,"")
+		F.Intrinsic.String.Split(V.Local.sRows(v.Local.iRCt),"*!*",V.Local.scells)
+			
+    		F.Intrinsic.Control.If(V.Local.sCells.UBound,>=,35)
+
+			F.Intrinsic.Control.If(V.Local.sCells(35).Trim,<>,"")
+				F.Intrinsic.math.Add(V.Local.iUB,1,V.Local.iUB)
+				V.uGlobal.uParents(v.Local.iUB)!Qty.Set(V.Local.sCells(7))
+				V.uGlobal.uParents(v.Local.iUB)!Row.Set(V.Local.iRCt)
+				V.uGlobal.uParents(v.Local.iUB)!Desc.Set(V.Local.sCells(8))
+				V.uGlobal.uParents(v.Local.iUB)!Part.Set(V.Local.sCells(15))
+				V.uGlobal.uRouterRow(v.Local.iUB)!Row.set(V.Local.irct)
+				V.uGlobal.uRouterRow(v.Local.iUB)!IsBOM.Set(True)
+				V.Local.iWC.Set(0)
+				'Router labor steps append 1- 10 excel sheet pos U (20?)
+				F.Intrinsic.Control.For(V.Local.iWCct,23,32,1)
+					F.Intrinsic.Control.If(V.Local.sCells(23).Trim,<>,"")
+						'add router step for later processing
+						V.Local.sWC.Set(V.Local.sCells(v.Local.iWCct).Trim)
+						V.uGlobal.uRouterRow(v.Local.iUB)!wc[v.Local.iwc].Set(V.Local.sWC)
+					F.Intrinsic.Control.endif
+					F.Intrinsic.Math.Add(V.Local.iWC,1,V.Local.iWC)
+				F.Intrinsic.Control.Next(V.Local.iWCct)
+				F.Intrinsic.Control.If(V.uGlobal.uParents(v.Local.iUB)!Part.Trim,=,"")
+					F.Intrinsic.String.Left(V.Local.sCells(17),30,V.Local.sDesc)
+					F.Intrinsic.String.Left(V.Local.sCells(18),30,V.Local.sAltDesc)
+					F.Intrinsic.String.Left(V.Local.sCells(19),30,V.Local.sAltDesc(1))
+
+					F.Intrinsic.Control.If(V.Local.sCells(0),<>,"0")
+						V.Local.ssource.Set("M")
+					F.Intrinsic.Control.Else
+						V.Local.ssource.Set("F")
+					F.Intrinsic.Control.endif
+					F.Intrinsic.Control.iF(V.Local.sCells(12),<>,"")
+						F.Intrinsic.Control.CallSub(Vendorpart,"spos",V.Local.irct,"sPartMfg",V.Local.sCells(12),"sVendor",V.Local.sCells(11),"sDesc",V.Local.sCells(17),"sName",V.Local.sCells(12),"UM",V.Local.sCells(20),"CONV",V.Local.sCells(16))
+						V.uGlobal.uParents(v.Local.iUB)!Part.Set(V.Args.spart)
+						V.Local.sdesc.Set(V.Local.sCells(12))
+						F.Intrinsic.String.Left(V.uGlobal.uParents(v.Local.iUB)!Part,20,V.uGlobal.uParents(v.Local.iUB)!Part)
+						F.global.Inventory.AddPartToBatch(V.uGlobal.uParents(v.Local.iUB)!Part,V.Local.sCells(20),V.Local.scells(8),"","FP",V.Local.ssource,V.Local.saltDesc,V.Local.sAltDesc(1),0,"UPLOADED")
+					F.Intrinsic.Control.Else
+						F.Intrinsic.Control.CallSub(Newpart,"spos",V.Local.irct,"sDesc",V.Local.sdesc)
+						V.uGlobal.uParents(v.Local.iUB)!Part.Set(V.Args.spart)
+						V.Local.sdesc.Set(V.Local.sCells(17))
+						F.Intrinsic.String.Left(V.uGlobal.uParents(v.Local.iUB)!Part,20,V.uGlobal.uParents(v.Local.iUB)!Part)
+						F.global.Inventory.AddPartToBatch(V.uGlobal.uParents(v.Local.iUB)!Part,"EA",V.Local.scells(8),"","FP",V.Local.ssource,V.Local.saltDesc,V.Local.sAltDesc(1),0,"UPLOADED")
+					F.Intrinsic.Control.endif
+					
+					'F.Intrinsic.control.CallSub(Buildpartstring,"Part",V.uGlobal.uParents(v.Local.iUB)!Part,"UM","EA","DESC",V.Local.scells(8),"LOC","","PL","FP","SOURCE",V.Local.ssource,"ALT2",V.Local.saltDesc,"ALT1",V.Local.sAltDesc(1),"PRICE",0)
+
+				F.Intrinsic.Control.endif
+				F.Intrinsic.String.Left(V.uGlobal.uParents(v.Local.iUB)!Part,20,V.uGlobal.uParents(v.Local.iUB)!Part)
+'				F.intrinsic.string.left(V.uGlobal.uParents(v.Local.iUB)!Parent,20,V.uGlobal.uParents(v.Local.iUB)!Parent)
+				V.uGlobal.uParents(v.Local.iUB)!Parent.set(V.uGlobal.uParents(v.Local.iUB)!Part)
+
+				V.uGlobal.uRouterRow(v.Local.iUB)!Part.Set(V.uGlobal.uParents(v.Local.iUB)!Part)
+				V.uGlobal.uRouterRow(v.Local.iUB)!IsBOM.Set(True)
+				'find level
+				F.Intrinsic.Control.For(V.Local.iX,0,6,1)
+					F.Intrinsic.Control.If(V.Local.sCells(v.Local.iX).Trim,<>,"")
+						V.uGlobal.uParents(v.Local.iUB)!Level.Set(V.Local.sCells(v.Local.iX).Trim)
+						F.Intrinsic.Math.add(V.local.ix,1,V.local.ilevelpos)
+						F.Intrinsic.Control.ExitFor(V.Local.iX)
+					F.Intrinsic.Control.EndIf
+				F.Intrinsic.Control.Next(V.Local.iX)
+				'loop through to find children
+				F.Intrinsic.Math.Add(V.Local.iRct,1,V.Local.iRNCt)
+				F.Intrinsic.Control.For(V.Local.iRChildCt,V.Local.iRNCt,V.Local.sRows.UBound,1)
+					F.Intrinsic.Control.If(V.Local.iRChildCt,<=,V.Local.sRows.UBound)
+						F.Intrinsic.Control.If(V.Local.sRows(v.Local.iRChildCt).Trim,<>,"")
+							F.Intrinsic.string.Split(V.Local.sRows(v.Local.iRChildCt),"*!*",V.Local.sCellsN)
+							F.Intrinsic.Control.If(V.Local.sCellsN(V.local.iLevelPos).Trim,<>,"")
+								F.Intrinsic.String.Concat(V.uGlobal.uParents(v.Local.iUB)!Children,V.Local.iRChildCt,"*!*",V.uGlobal.uParents(v.Local.iUB)!children)
+							F.Intrinsic.Control.endif
+							F.Intrinsic.Math.sub(V.Local.iLevelPos,1,V.Local.iLevelPrev)
+							F.Intrinsic.Control.If(V.Local.sCellsN(V.local.iLevelPrev).Trim,<>,"")
+								F.Intrinsic.Control.ExitFor(V.Local.iRChildCt)
+							F.Intrinsic.Control.endif
+						F.Intrinsic.Control.EndIf
+					F.Intrinsic.Control.endif
+				F.Intrinsic.Control.Next(V.Local.iRChildCt)
+			F.Intrinsic.Control.endif
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.endif
+F.Intrinsic.Control.next(V.Local.iRCt)
+V.uGlobal.uParents.Redimpreserve(0,V.Local.iub)
+V.uGlobal.uRouterRow.Redimpreserve(0,V.Local.iub)
+
+'F.Intrinsic.Debug.InvokeDebugger
+'
+'
+
+'			'Router labor steps append 1- 10 excel sheet pos U (20?)
+'			F.Intrinsic.Control.For(V.Local.iX,20,29,1)
+'				F.Intrinsic.Control.If(V.Local.sCells(v.Local.iX).Trim,<>,"")
+'					'add router step
+'					
+'				F.Intrinsic.Control.endif
+'			F.Intrinsic.Control.Next(V.Local.iX)
+
+Program.Sub.ProcessExcel.End
+
+Program.Sub.ProcesBOMs.Start
+V.Local.iC.Declare(Long)
+V.Local.iX.Declare(Long)
+V.Local.sRows.Declare(String)
+V.Local.sChilds.Declare(String)
+V.Local.sCells.Declare(String)
+V.Local.spart.Declare(String)
+V.Local.sPL.Declare(String)
+V.Local.sSC.Declare(String)
+V.Local.sDesc.Declare(String)
+V.Local.iQTY.Declare(Float)
+V.Local.iChild.Declare(Long)
+V.Local.sAltDesc.Declare(String)
+V.Local.sAltDesc.Redim(0,1)
+V.Local.iRow.Declare(Long)
+V.Local.iUB.Declare(Long)
+V.Local.iWC.Declare(Long)
+V.Local.iUBPart.Declare(Long)
+V.Local.sdescTemp.Declare(String)
+
+V.Local.iWCct.Declare(Long)
+'loop through building each BOM
+
+F.Intrinsic.String.Split(V.Global.sSheet,"$!$",V.Local.sRows)
+
+
+F.Intrinsic.Control.For(V.Local.iC,0,V.uglobal.uParents.UBound,1)
+	F.Intrinsic.Control.If(V.uGlobal.uParents(v.Local.iC)!Part,<>,"")
+		F.Intrinsic.Control.CallSub(Bomclear)
+		F.Intrinsic.String.Split(V.uGlobal.uParents(v.Local.iC)!Children,"*!*",V.Local.sChilds)
+		F.Intrinsic.UI.ChangeWaitStatus("Processing BOMS",V.Local.iC,1,V.uglobal.uParents.UBound)
+		F.Intrinsic.Control.CallSub(Bomaddrecord,"Parent",V.uGlobal.uParents(v.Local.iC)!Parent,"Part",V.uGlobal.uParents(v.Local.iC)!Parent,"Quantity",V.uGlobal.uParents(v.Local.iC)!Qty,"Description",V.uGlobal.uParents(v.Local.iC)!desc,"PL","FP","SortCode",V.Local.sSC,"Category","N")
+		F.Intrinsic.Control.For(V.Local.iX,0,V.Local.sChilds.UBound,1)
+			F.Intrinsic.Control.If(V.Local.schilds(v.Local.iX).Trim,<>,"")
+				'parent, part, quantity, description, pl, sortcode, category
+
+				V.Local.iChild.Set(V.Local.sChilds(v.Local.iX))
+				F.Intrinsic.String.Split(V.Local.sRows(v.Local.iChild),"*!*",V.Local.scells)
+				V.Local.sDesc.Set(V.Local.sCells(8))
+				F.Intrinsic.Control.If(V.Local.sCells(12).Trim,<>,"")
+					
+
+					F.Intrinsic.String.Left(V.Local.sCells(12).Trim,20,V.Local.spart)
+					F.Intrinsic.Control.selectcase(V.Local.sCells(20).trim)
+						F.Intrinsic.Control.Case("M")
+							V.Local.iQTY.Set(V.Local.sCells(10))
+						F.Intrinsic.Control.Case("MM")
+							V.Local.iQTY.Set(V.Local.sCells(10))
+						F.Intrinsic.Control.Case("IN")
+							V.Local.iQTY.Set(V.Local.sCells(10))
+						F.Intrinsic.Control.Case("FT")
+							V.Local.iQTY.Set(V.Local.sCells(10))
+						F.Intrinsic.Control.CaseElse
+							V.Local.iQTY.Set(V.Local.sCells(7))
+					F.Intrinsic.Control.EndSelect
+					V.Local.sPL.Set("RM")
+					V.Local.sSC.Set("PJ")
+					F.Intrinsic.Control.CallSub(Vendorpart,"spos",V.Local.schilds(v.Local.iX),"sPartMfg",V.Local.sCells(12),"sVendor",V.Local.sCells(11),"sDesc",V.Local.sCells(17),"sName",V.Local.sCells(12),"UM",V.Local.sCells(20),"CONV",V.Local.sCells(16))
+					V.Local.spart.set(V.Args.spart)
+					V.Local.sdesc.Set(V.Local.sCells(12))
+					F.Intrinsic.Control.If(V.Args.bNew,=,True)
+						F.Intrinsic.String.Left(V.Local.spart,20,V.Local.spart)
+						F.Intrinsic.String.Left(V.Local.sCells(17),30,V.Local.sDesc)
+						F.Intrinsic.String.Left(V.Local.sCells(18),30,V.Local.sAltDesc)
+						F.Intrinsic.String.Left(V.Local.sCells(19),30,V.Local.sAltDesc(1))
+						F.global.Inventory.addPartToBatch(V.Local.spart,"EA",V.Local.sdesc,"",V.Local.sPL,V.Local.ssc,V.Local.saltDesc,V.Local.sAltDesc(1),0,"UPLOADED")
+					F.Intrinsic.Control.EndIf
+					'create inventory xref
+				F.Intrinsic.Control.Else
+					V.Local.spart.Set(V.Local.sCells(15))
+					V.Local.iQTY.Set(V.Local.sCells(7))
+					V.Local.sPL.Set("FP")
+					V.Local.sSC.Set("MJ")
+				F.Intrinsic.Control.endif
+				F.Intrinsic.Control.If(V.Local.spart.Trim,=,"")
+
+				'	F.Intrinsic.Variable.UDTSeek(V.uGlobal.uReplace!Record,V.Local.spos,5,V.Local.spart)
+					F.Intrinsic.Control.If(V.Local.sCells(15).Trim,=,"")
+						F.Intrinsic.String.Left(V.Local.sCells(17),30,V.Local.sDesctemp)
+						F.Intrinsic.Control.If(V.Local.sdesctemp.Trim,=,"")
+							F.Intrinsic.String.Left(V.Local.sCells(8),30,V.Local.sDesctemp)
+						F.Intrinsic.Control.EndIf
+						F.Intrinsic.Control.CallSub(Newpart,"spos",V.Local.schilds(v.Local.iX),"sqty",V.Local.iQTY,"sdesc",V.Local.sDesctemp)
+						V.Local.spart.Set(V.Args.spart)
+						F.Intrinsic.Control.If(V.Args.bNew,=,True)
+							F.Intrinsic.String.Left(V.Local.spart,20,V.Local.spart)
+							F.Intrinsic.String.Left(V.Local.sCells(17),30,V.Local.sDesc)
+							F.Intrinsic.String.Left(V.Local.sCells(18),30,V.Local.sAltDesc)
+							F.Intrinsic.String.Left(V.Local.sCells(19),30,V.Local.sAltDesc(1))
+							F.Intrinsic.Control.If(V.Local.sdesc,=,"")
+								F.Intrinsic.String.Left(V.Local.sCells(8),30,V.Local.sDesc)
+							F.Intrinsic.Control.EndIf
+
+							F.global.Inventory.addPartToBatch(V.Local.spart,"EA",V.Local.sdesc,"",V.Local.sPL,V.Local.ssc,V.Local.saltDesc,V.Local.sAltDesc(1),0,"UPLOADED")
+						F.Intrinsic.control.EndIf
+
+					F.Intrinsic.Control.EndIf
+
+					'F.Intrinsic.control.CallSub(Buildpartstring,"Part",V.Local.spart,"UM","EA","DESC",V.Local.sdesc,"LOC","","PL",V.Local.sPL,"SOURCE",V.Local.ssc,"ALT2",V.Local.saltDesc,"ALT1",V.Local.sAltDesc(1),"PRICE",0)
+				F.Intrinsic.Control.Else
+					F.Intrinsic.Math.Add(V.Global.iUBRep,1,V.Global.iUBRep)
+					F.Intrinsic.Control.If(V.global.iUBRep,>,V.uglobal.ureplace.ubound)
+						V.uGlobal.ureplace.redimpreserve(0,V.global.iUBRep)
+
+					F.Intrinsic.Control.endif
+					V.uGlobal.uReplace(V.Global.iUBRep)!Part.set(V.Local.spart)
+					V.uGlobal.uReplace(V.Global.iUBRep)!Record.Set(V.Local.sChilds(v.Local.iX))
+					V.uGlobal.uReplace(V.Global.iUBRep)!QTY.Set(V.Local.iQTY)
+				F.Intrinsic.Control.endif
+				F.Intrinsic.Control.If(V.Local.sCells(19).Trim,<>,"")
+					F.Intrinsic.control.If(V.uGlobal.uRouterRow.UBound,=,-1)
+						V.uGlobal.uRouterRow.Redim(0,0)
+						V.local.iUB.set(0)
+					F.Intrinsic.Control.Else
+						F.Intrinsic.Math.Add(V.uGlobal.uRouterRow.UBound,1,V.Local.iUB)
+						V.uGlobal.uRouterRow.Redimpreserve(0,V.Local.iUB)
+					F.Intrinsic.Control.endif
+					V.Local.iWC.Set(0)
+					V.uGlobal.uRouterRow(v.Local.iUB)!Row.Set(V.Local.sChilds(v.Local.iX))
+					V.uGlobal.uRouterRow(v.Local.iUB)!Material.Set(V.Local.sCells(12))
+					V.uGlobal.uRouterRow(v.Local.iUB)!Part.Set(V.Local.spart)
+					F.Intrinsic.Control.For(V.Local.iWCct,23,32,1)
+						F.Intrinsic.Control.If(V.Local.sCells(23).Trim,<>,"")
+						'add router step for later processing
+							V.uGlobal.uRouterRow(v.Local.iUB)!wc[v.Local.iwc].Set(V.Local.sCells(v.Local.iWCct).Trim)
+						F.Intrinsic.Control.endif
+						F.Intrinsic.Math.Add(V.Local.iWC,1,V.Local.iWC)
+					F.Intrinsic.Control.Next(V.Local.iWCct)
+				F.Intrinsic.Control.endif
+				F.Intrinsic.Control.If(V.Local.iQTY,=,0)
+					V.Local.iQTY.Set(1)
+				F.Intrinsic.Control.endif
+				F.Intrinsic.Control.CallSub(Bomaddrecord,"Parent",V.uGlobal.uParents(v.Local.iC)!Parent,"Part",V.Local.spart,"Quantity",V.Local.iQTY,"Description",V.Local.sdesc,"PL",V.Local.sPL,"SortCode",V.Local.sSC,"Category","N")
+			F.Intrinsic.Control.endif
+		F.Intrinsic.control.Next(V.Local.iX)
+
+		F.Intrinsic.Control.CallSub(Bomgenerate)
+	F.Intrinsic.Control.endif
+F.Intrinsic.Control.NEXT(V.Local.iC)
+
+Program.Sub.ProcesBOMs.End
+
+Program.Sub.Newpart.Start
+'function to get next part number.
+V.Local.spart.Declare(String)
+V.Local.iub.Declare(Long)
+V.Local.spos.Declare(String)
+V.local.sRet.declare(String)
+V.Local.stemp.Declare(String)
+V.Local.bret.Declare(Boolean)
+V.Local.squery.Declare(String)
+
+F.Intrinsic.Variable.AddRV("sPart","")
+F.Intrinsic.Variable.AddRV("bNew",False)
+V.Local.spos.Set(V.args.spos)
+'F.Intrinsic.Control.CallSub(Seekpartreplace,"spos",V.Args.spos)
+F.Intrinsic.Variable.UDTSeek(V.uGlobal.uReplace!Record,V.Local.spos,5,V.local.sRet)
+V.Local.spart.Set(V.local.sret)
+F.Intrinsic.Control.If(V.Local.spart,=,"")
+	'f.Intrinsic.Debug.setLa("Creating a new part")
+	F.Intrinsic.string.Left(V.Args.sdesc,30,V.Local.stemp)
+
+'	F.Intrinsic.String.Concat("SELECT PART FROM INVENTORY_MSTR WHERE DESCRIPTION = '",V.local.sTemp,"'",V.Local.squery)
+'	F.ODBC.Connection!conx.OpenRecordsetRW("rstXRef",V.Local.squery)
+'
+'	F.Intrinsic.Control.If(V.odbc.conx!rstxref.EOF,=,True)
+		F.ODBC.Connection!conx.OpenRecordsetRW("rstNewPart","SELECT CONS_PART_FRAG, PART_START_NUM FROM ASSIGN_CUST_OPT WHERE ASS_SYS='CUS' AND ASS_SUB_SYS = 'TOM'")
+		F.Intrinsic.Control.If(V.ODBC.conx!rstNewPart.EOF,=,True)
+			'V.Local.spart.Set("40000000000")
+			F.Intrinsic.UI.Msgbox("Auto Part Number Generation not found")
+			F.Intrinsic.Control.End
+		F.Intrinsic.Control.Else
+	'		V.Local.spart.Set(V.ODBC.conx!rstNewPart.FieldVal!PART_START_NUM)
+	'		F.Intrinsic.Control.If(V.Local.spart.IsNumeric,=,True)
+			F.Intrinsic.Math.Add(V.ODBC.conx!rstNewPart.FieldVal!PART_START_NUM,1,V.Local.spart)
+	'		F.Intrinsic.Control.endif
+			F.ODBC.conx!rstNewPart.Set!PART_START_NUM(V.Local.spart)
+			F.ODBC.Conx!rstNewPart.Update
+			F.Intrinsic.string.Concat(V.ODBC.conx!rstNewPart.FieldValtrim!CONS_PART_FRAG,V.ODBC.conx!rstNewPart.FieldVal!PART_START_NUM,V.Local.spart)
+		F.Intrinsic.Control.EndIf
+		
+		F.ODBC.conx!rstNewPart.Close
+		F.Intrinsic.String.Concat(V.Global.ErrorLOg,"Part Created: ",V.Local.spart,V.Ambient.NewLine,V.Global.ErrorLOg)
+		F.Intrinsic.String.Concat("Part Created: ",V.Local.spart,V.Local.sRet)
+		F.Intrinsic.Variable.AddRV("bNew",True)
+'	F.Intrinsic.Control.Else
+'		V.Local.spart.Set(V.ODBC.conx!rstXRef.FieldValTrim!PART)
+'		F.Intrinsic.Variable.AddRV("bNew",False)
+'	F.Intrinsic.Control.EndIf
+'	F.ODBC.conx!rstXRef.close
+
+'	f.Intrinsic.Debug.setla(V.Local.sRet)
+	F.Intrinsic.Math.Add(V.Global.iUBRep,1,V.Global.iUBRep)
+	V.uglobal.uReplace.RedimPreserve(0,V.global.iUBRep)
+	V.uGlobal.uReplace(v.global.iubrep)!Part.set(V.Local.spart)
+	V.uGlobal.uReplace(v.global.iubrep)!Record.Set(V.Local.spos)
+	V.uGlobal.uReplace(v.global.iubrep)!Qty.Set(1)
+
+	F.Intrinsic.variable.ArgExists("sVendorPart",V.Local.bret)
+	F.Intrinsic.Control.If(V.Local.bret,"=",True)
+		F.Intrinsic.String.Concat("Enter Lead Time for Vendor Part: ",V.Args.sVendorPart,V.Local.sTemp)
+		F.Intrinsic.UI.Inputbox(V.Local.sTemp,"Enter Lead Time","1",V.Local.sTemp)
+		V.uGlobal.uReplace(v.global.iubrep)!LEADTIME.set(V.local.stemp)
+		F.Intrinsic.String.Concat("Enter Vendor for Vendor Part: ",V.Args.sVendorPart,V.Local.sTemp)
+		F.Intrinsic.UI.Inputbox(V.Local.sTemp,"Enter Vendor Number","",V.Local.stemp)
+		V.uGlobal.uReplace(v.global.iubrep)!vendor.set(V.local.stemp)
+		F.Intrinsic.Variable.AddRV("sVendor",V.Local.stemp)
+		V.uGlobal.uReplace(v.global.iubrep)!conv.set(V.args.conv)
+	F.Intrinsic.Control.EndIf
+	
+F.Intrinsic.Control.Else
+	V.local.spart.set(V.uGlobal.uReplace(V.Local.spart)!Part)
+F.Intrinsic.Control.endif
+
+F.Intrinsic.Variable.AddRV("sPart",V.Local.spart)
+
+Program.Sub.Newpart.End
+
+Program.Sub.UpdatePart.Start
+'loop through for lead time.
+V.Local.ic.Declare(Long)
+V.Local.sQuery.Declare(String)
+
+
+F.Intrinsic.Control.For(V.Local.ic,0,V.uGlobal.uReplace.UBound,1)
+	F.Intrinsic.UI.ChangeWaitStatus("Processing Inventory:",V.Local.iC,1,V.uglobal.uParents.UBound)
+	F.Intrinsic.Control.If(V.uglobal.uReplace(v.local.ic)!LEADTIME,<>,"")
+		F.Intrinsic.string.Concat("SELECT TIME_MATERIAL_LEAD, FACTOR_CONVERSION FROM INVENTORY_MSTR WHERE PART = '",V.Uglobal.uReplace(v.Local.ic)!part,"'",V.Local.sQuery)
+		F.ODBC.Connection!conx.OpenRecordsetRW("rstPart",V.Local.sQuery)
+		F.Intrinsic.Control.If(V.ODBC.conx!rstPart.EOF,=,False)
+			F.ODBC.conx!rstPart.Set!TIME_MATERIAL_LEAD(V.Uglobal.uReplace(v.Local.ic)!LEADTIME)
+			F.Intrinsic.Control.if(V.Uglobal.uReplace(v.Local.ic)!conv.IsNumeric,=,True)
+				F.ODBC.conx!rstPart.Set!FACTOR_CONVERSION(V.Uglobal.uReplace(v.Local.ic)!conv)
+			f.Intrinsic.Control.endif
+			F.ODBC.conx!rstPart.Update
+		F.Intrinsic.Control.EndIf
+		F.ODBC.conx!rstPart.Close
+		F.Intrinsic.string.Concat("SELECT NAME_VENDOR FROM INVENTORY_MST2 WHERE PART = '",V.Uglobal.uReplace(v.Local.ic)!part,"'",V.Local.sQuery)
+		F.ODBC.Connection!conx.OpenRecordsetRW("rstPart",V.Local.sQuery)
+		F.Intrinsic.Control.If(V.ODBC.conx!rstPart.EOF,=,False)
+			F.ODBC.conx!rstPart.Set!NAME_VENDOR(V.Uglobal.uReplace(v.Local.ic)!vendor)
+			F.ODBC.conx!rstPart.Update
+		F.Intrinsic.Control.EndIf
+		F.ODBC.conx!rstPart.Close
+
+	F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Next(V.Local.ic)
+
+Program.Sub.UpdatePart.End
+
+Program.Sub.BuildRouters.Start
+V.Local.iX.Declare(Long)
+V.Local.iWC.Declare(Long)
+V.Local.ic.Declare(Long)
+V.Local.sParent.Declare(String)
+V.Local.sPart.Declare(String)
+V.Local.schilds.Declare(String)
+V.Local.sQty.Declare(String)
+V.local.sRet.declare(String)
+
+'Router Add line Arguement
+'Number, part, RunTime, pl, Comment, um, lmo,worcenter, overlap
+
+F.Intrinsic.Control.For(V.Local.iX,V.uglobal.uRouterRow.LBound,V.uGlobal.uRouterrow.UBound,1)
+	F.Intrinsic.Control.CallSub(Routerclear)
+	F.Intrinsic.UI.ChangeWaitStatus("Processing Routers",V.Local.iX,1,V.uGlobal.uRouterrow.UBound)
+	F.Intrinsic.Control.If(V.uglobal.uRouterRow(v.Local.iX)!IsBOM,=,True)
+	'	F.Intrinsic.Control.CallSub("SeekParent","sPos",V.uGlobal.uRouterRow(v.Local.iX)!Row)
+		F.Intrinsic.Variable.UDTSeek(V.Uglobal.uParents!Row,V.uGlobal.uRouterRow(v.Local.iX)!Row,5,V.local.sRet)
+
+		F.Intrinsic.Control.If(V.Local.sret,<>,"")
+			V.Local.ic.Set(V.local.sret.long)
+
+			V.local.sparent.set(V.uGlobal.uParents(v.Local.ic)!part)
+			F.Intrinsic.String.Split(V.uGlobal.uParents(v.Local.ic)!Children,"*!*",V.Local.schilds)
+			F.Intrinsic.Control.For(V.Local.iWC,0,V.Local.schilds.UBound,1)
+				F.Intrinsic.Control.If(V.Local.schilds(v.Local.iWC).Trim,<>,"")
+				'	F.Intrinsic.Control.CallSub(Seekpartreplace,"sPos",V.Local.schilds(v.Local.iWC))
+					F.Intrinsic.Variable.UDTSeek(V.uGlobal.uReplace!Record,V.Local.schilds(v.Local.iWC),5,V.local.sRet)
+					
+					F.Intrinsic.Control.If(V.local.sret,<>,"")
+						V.Local.sPart.Set(V.uglobal.uReplace(V.local.sret.long)!Part)
+						V.Local.sQty.Set(V.uglobal.uReplace(V.local.sret.long)!qty)
+						F.Intrinsic.Debug.stop
+						F.Intrinsic.Control.CallSub(Routeraddrecord,"Number",V.Local.sParent,"Part",V.Local.spart,"RunTime",V.Local.sqty,"PL","RM","Comment","","UM","EA","LMO","M","WORKCENTER","","OVERLAP","")
+					F.Intrinsic.Control.endif
+				F.Intrinsic.Control.endif
+			F.Intrinsic.Control.Next(V.Local.iWC)
+			F.intrinsic.control.callsub(Addrouterwc,"spos",V.local.ix)
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.Else
+		F.Intrinsic.Debug.stop
+		V.Local.sParent.Set(V.uGlobal.uRouterRow(v.Local.iX)!Part)
+		V.Local.sPart.Set(V.uGlobal.uRouterRow(v.Local.iX)!Material)
+		V.Local.sQty.Set(V.uGlobal.uRouterRow(v.Local.iX)!length)
+		F.Intrinsic.Control.CallSub(Routeraddrecord,"Number",V.local.sParent,"Part",V.Local.spart,"RunTime",V.Local.sQty,"PL","RM","Comment","","UM","EA","LMO","M","WORKCENTER","","OVERLAP","")
+		F.intrinsic.control.callsub(Addrouterwc,"spos",V.local.ix)
+		
+	F.Intrinsic.Control.endif
+	F.Intrinsic.Control.CallSub(Routergenerate)
+F.Intrinsic.Control.Next(V.Local.iX)
+
+Program.Sub.BuildRouters.End
+
+Program.Sub.AddRouterWC.Start
+V.Local.ix.Declare(String)
+V.Local.iWCct.Declare(Long)
+
+V.Local.ix.Set(V.Args.spos)
+V.local.sWC.declare(String)
+V.local.sparent.declare(String)
+
+V.local.sparent.set(V.uGlobal.uRouterRow(v.Local.iX)!Part)
+F.Intrinsic.Control.For(V.Local.iWCct,0,9,1)
+	
+	F.Intrinsic.Control.If(V.uGlobal.uRouterRow(v.Local.iX)!wC[v.Local.iwcct],<>,"")
+		V.local.swc.set(V.uGlobal.uRouterRow(v.Local.iX)!wC[v.Local.iwcct])
+		F.Intrinsic.Control.CallSub(Wcexists,"wc",V.Local.sWC)
+		F.Intrinsic.Control.CallSub(Routeraddrecord,"Number",V.local.sparent,"Part","","PL","","RunTime",1,"Comment","","UM","EA","LMO","L","WORKCENTER",V.local.swc,"OVERLAP","")
+	F.Intrinsic.Control.endif
+F.Intrinsic.Control.next(V.Local.iWCct)
+
+Program.Sub.AddRouterWC.End
+
+Program.Sub.WCExists.Start
+V.Local.squery.Declare(String)
+F.Intrinsic.String.Concat("select WORK_GROUP from WORKGROUP_HEAD WHERE  WORK_GROUP = '",V.Args.wc,"'",V.local.squery)
+F.ODBC.Connection!conx.OpenRecordsetRO("rst",V.Local.squery)
+F.Intrinsic.Control.If(V.ODBC.conx!rst.EOF,=,False)
+	F.ODBC.Conx!rst.close
+	F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.endif
+F.ODBC.Conx!rst.close
+
+F.Intrinsic.String.Concat("select MACHINE from WORKCENTERS WHERE  MACHINE = '",V.Args.wc,"'",V.local.squery)
+F.ODBC.Connection!conx.OpenRecordsetRO("rst",V.Local.squery)
+F.Intrinsic.Control.If(V.ODBC.conx!rst.EOF,=,True)
+	F.Intrinsic.String.Concat(V.global.ErrorLOg,"WC/WG Not Found: ",V.Args.wc,V.Ambient.NewLine,V.Global.ErrorLOg)
+F.Intrinsic.Control.endif
+F.ODBC.Conx!rst.close
+
+Program.Sub.WCExists.End
+
+Program.Sub.WriteErrorLog.Start
+
+V.Local.sFile.Declare(String)
+
+F.Intrinsic.String.Concat(V.Caller.FilesDir,"\BOMUpload",V.Caller.Terminal,".log",V.Local.sFile)
+
+F.Intrinsic.File.String2File(V.Local.sFile,V.Global.ErrorLOg)
+
+F.Intrinsic.UI.Msgbox(V.Local.sFile,"Erro Log Found At:")
+
+f.Intrinsic.Control.end
+
+Program.Sub.WriteErrorLog.End
+
+Program.Sub.BuildPartString.Start
+V.Local.stemp.Declare(String)
+
+'F.Intrinsic.control.CallSub(Buildpartstring,"Part",V.Local.spart,"UM","EA","DESC",V.Local.sdesc,"LOC","","PL",V.Local.sPL,"SOURCE",V.Local.ssc,"ALT2",V.Local.saltDesc,"ALT1",V.Local.sAltDesc(1),"PRICE",0)
+F.Intrinsic.String.LPad(V.caller.CompanyCode," ",3,V.Local.stemp)
+F.Intrinsic.String.Concat(V.Global.sParts,V.Local.stemp,V.global.sParts)
+
+F.Intrinsic.String.RPad(V.caller.Terminal,"0",3,V.Local.stemp)
+F.Intrinsic.String.Concat(V.Global.sParts,V.Local.stemp,V.global.sParts)
+
+F.Intrinsic.String.LPad("OCTSRS"," ",8,V.Local.stemp)
+F.Intrinsic.String.Concat(V.Global.sParts,V.Local.stemp,V.global.sParts)
+
+
+F.Intrinsic.String.LPad(V.Args.part," ",20,V.Local.stemp)
+F.Intrinsic.String.Concat(V.Global.sParts,V.Local.stemp,V.global.sParts)
+
+F.Intrinsic.String.LPad(V.Args.UM," ",2,V.Local.stemp)
+F.Intrinsic.String.Concat(V.Global.sParts,V.Local.stemp,V.global.sParts)
+
+F.Intrinsic.String.LPad(V.Args.Desc," ",30,V.Local.stemp)
+F.Intrinsic.String.Concat(V.Global.sParts,V.Local.stemp,V.global.sParts)
+
+F.Intrinsic.String.LPad(V.Args.LOC," ",2,V.Local.stemp)
+F.Intrinsic.String.Concat(V.Global.sParts,V.Local.stemp,V.global.sParts)
+
+F.Intrinsic.String.LPad(V.Args.PL," ",3,V.Local.stemp)
+F.Intrinsic.String.Concat(V.Global.sParts,V.Local.stemp,V.global.sParts)
+
+F.Intrinsic.String.LPad(V.Args.Source," ",1,V.Local.stemp)
+F.Intrinsic.String.Concat(V.Global.sParts,V.Local.stemp,V.global.sParts)
+
+F.Intrinsic.String.LPad(V.Args.Alt1," ",30,V.Local.stemp)
+F.Intrinsic.String.Concat(V.Global.sParts,V.Local.stemp,V.global.sParts)
+
+F.Intrinsic.String.LPad(V.Args.alt2," ",30,V.Local.stemp)
+F.Intrinsic.String.Concat(V.Global.sParts,V.Local.stemp,V.global.sParts)
+
+'F.Intrinsic.String.LPad(V,"0",13,V.Local.stemp)
+F.Intrinsic.String.Concat(V.Global.sParts,"0000000100000",V.global.sParts)
+
+F.Intrinsic.String.Concat(V.Global.sParts,V.ambient.NewLine,V.global.sParts)
+
+Program.Sub.BuildPartString.End
+
+Program.Sub.ProcessParts.Start
+V.Local.filedir.Declare(String)
+V.Local.filename.Declare(String)
+V.Local.bomload.Declare(String)
+V.Local.temp.Declare(String)
+
+F.Intrinsic.String.Concat("LB",V.Caller.Terminal,V.Caller.CompanyCode,V.Local.filename)
+'output file
+F.Intrinsic.String.Concat(V.Caller.FilesDir,"\",V.Local.filename,V.Local.filedir)
+F.Intrinsic.File.String2File(V.Local.filedir,V.global.sparts)
+f.Intrinsic.Debug.Stop
+F.Intrinsic.Control.DoEvents
+F.Intrinsic.Task.LaunchGSSSync("QTE005F","-c",V.Local.filename)
+
+Program.Sub.ProcessParts.End
+
+Program.Sub.VendorPart.Start
+V.Local.squery.Declare(String)
+V.Local.spart.Declare(String)
+V.Local.sVendor.Declare(String)
+V.Local.sTemp.Declare(String)
+
+V.Local.sVendor.Set(V.Args.svendor)
+F.Intrinsic.String.Left(V.Args.spartmfg,23,V.Local.stemp)
+F.Intrinsic.String.Concat("SELECT * FROM INV_CROSS_REF WHERE MFG_PART = '",V.local.sTemp,"'",V.Local.squery)
+F.ODBC.Connection!conx.OpenRecordsetRW("rstXRef",V.Local.squery)
+
+F.Intrinsic.Control.If(V.odbc.conx!rstxref.EOF,=,True)
+	'get new part else return old part
+
+	F.Intrinsic.Control.CallSub(Newpart,"spos",V.args.spos,"svendorPart",V.args.spartmfg,"sVendor",V.Local.sVendor,"Conv",V.Args.conv,"sDesc",V.args.sDesc)
+	F.odbc.conx!rstXRef.AddNew
+	F.ODBC.conx!rstXRef.Set!Part(V.args.spart)
+	'idea have editor add args autotmaitically or ask if you would like it added
+
+	F.ODBC.conx!rstXRef.Set!LOCATION("")
+	F.ODBC.conx!rstXRef.Set!CUSTOMER("")
+	F.ODBC.conx!rstXRef.Set!CUSTOMER_PART("")
+	F.Intrinsic.String.Left(V.local.svendor,6,V.Local.stemp)
+	F.ODBC.conx!rstXRef.Set!VENDOR(V.local.sTemp)
+	F.Intrinsic.String.Left(V.Args.spartmfg,23,V.Local.stemp)
+	F.ODBC.conx!rstXRef.Set!MFG_PART(V.Local.sTemp)
+	F.Intrinsic.String.Left(V.Args.spartmfg,23,V.Local.stemp)
+	F.ODBC.conx!rstXRef.Set!MFG_NAME(V.args.sVendor)
+	F.Intrinsic.String.Left(V.Args.sDesc,30,V.Local.stemp)
+	F.ODBC.conx!rstXRef.Set!DESCRIPTION(V.Local.sTemp)
+	F.ODBC.conx!rstXRef.Set!WEB_FLAG("")
+	F.Intrinsic.String.Left(V.Args.spartmfg,30,V.Local.stemp)
+	F.ODBC.conx!rstXRef.Set!USER_DEFINED_PART(V.local.sTemp)
+	F.ODBC.conx!rstXRef.Set!STATUS("")
+	F.ODBC.conx!rstXRef.Set!COMMENT("")
+	F.ODBC.conx!rstXRef.Set!FILLER("")
+	F.ODBC.conx!rstXRef.Update
+	F.Intrinsic.Variable.AddRV("sPart",V.Args.spart)
+	F.Intrinsic.Variable.AddRV("bNew",True)
+F.Intrinsic.Control.Else
+	F.Intrinsic.Variable.AddRV("sPart",V.ODBC.conx!rstXRef.FieldValTrim!part)
+	F.Intrinsic.Variable.AddRV("bNew",False)
+F.Intrinsic.Control.EndIf
+
+F.ODBC.Conx!rstXRef.Close
+
+Program.Sub.VendorPart.End
+
+
